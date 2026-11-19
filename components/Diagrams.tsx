@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, RotateCcw, Activity, HelpCircle, AlertTriangle, ShieldCheck, Info, Zap, Save, Check, Share2, Link2 } from 'lucide-react';
+import { Play, RotateCcw, Activity, HelpCircle, AlertTriangle, ShieldCheck, Info, Zap, Save, Check, Share2, Link2, X, ShieldAlert } from 'lucide-react';
 import { GeneticTerm } from './GeneticTermOverlay';
 import { useFirebase } from './FirebaseProvider';
 import { buildShareUrl, copyTextToClipboard } from '../utils/shareState';
@@ -415,6 +415,97 @@ export interface GeneLabSimulatorProps {
   activeGwasGeneId?: string | null;
 }
 
+interface BiologicalConflict {
+  id: string;
+  title: string;
+  severity: 'Critical Trade-off' | 'High Risk';
+  synergyPenalty: number;
+  conflictingGenes: string[];
+  summary: string;
+  evolutionaryReason: string;
+}
+
+function evaluateBiologicalConflicts(selectedGenes: string[]): BiologicalConflict[] {
+  const conflicts: BiologicalConflict[] = [];
+
+  // 1. Inertial Acceleration Conflict (ACTN3 sprinter + LRP5 hyper-dense bone mass)
+  if (selectedGenes.includes('actn3') && selectedGenes.includes('lrp5')) {
+    conflicts.push({
+      id: 'actn3-lrp5',
+      title: 'Inertial Acceleration Conflict',
+      severity: 'Critical Trade-off',
+      synergyPenalty: 25,
+      conflictingGenes: ['actn3', 'lrp5'],
+      summary:
+        'Combining explosive ACTN3 fast-twitch fibers with hyper-dense LRP5 bone mass pits maximal acceleration against heavy skeletal inertia.',
+      evolutionaryReason:
+        'Sprinting efficiency requires a high power-to-weight ratio. Heavy, calcified limb bones sharply raise rotational inertia and transmit extreme shear forces across tendons during explosive starts.',
+    });
+  }
+
+  // 2. Sinking Sprinter Paradox (LRP5 bone density + FAM178B diving)
+  if (selectedGenes.includes('lrp5') && selectedGenes.includes('fam178b')) {
+    conflicts.push({
+      id: 'lrp5-fam178b',
+      title: 'The Sinking Sprinter Paradox',
+      severity: 'Critical Trade-off',
+      synergyPenalty: 30,
+      conflictingGenes: ['lrp5', 'fam178b'],
+      summary:
+        'Heavy LRP5 skeletal density destroys natural aquatic buoyancy, forcing constant muscular strain to stay afloat.',
+      evolutionaryReason:
+        'Negative ballast accelerates oxygen consumption underwater, directly neutralizing the breath-hold CO₂ buffering conferred by FAM178B.',
+    });
+  }
+
+  // 3. Oxygen Paradox (ACTN3 sprinter fast-twitch + EPAS1 altitude or FAM178B diving)
+  if (
+    selectedGenes.includes('actn3') &&
+    (selectedGenes.includes('epas1') || selectedGenes.includes('fam178b'))
+  ) {
+    const oxyGenes = ['actn3'];
+    if (selectedGenes.includes('epas1')) oxyGenes.push('epas1');
+    if (selectedGenes.includes('fam178b')) oxyGenes.push('fam178b');
+    conflicts.push({
+      id: 'actn3-oxygen',
+      title: 'The Oxygen Paradox',
+      severity: 'Critical Trade-off',
+      synergyPenalty: 30,
+      conflictingGenes: oxyGenes,
+      summary:
+        'Explosive fast-twitch ACTN3 fibers rapidly consume oxygen and ATP, colliding with hypoxic conservation pathways.',
+      evolutionaryReason:
+        'High-altitude (EPAS1) and deep-dive (FAM178B) survival depend on slow, oxygen-sparing oxidative metabolism that cannot sustain anaerobic fast-twitch burn.',
+    });
+  }
+
+  // 4. Undetected Tissue Failure (FAAH-OUT no-pain + high-stress physical alleles)
+  if (
+    selectedGenes.includes('faahout') &&
+    (selectedGenes.includes('actn3') ||
+      selectedGenes.includes('fam178b') ||
+      selectedGenes.includes('lrp5'))
+  ) {
+    const painGenes = ['faahout'];
+    if (selectedGenes.includes('actn3')) painGenes.push('actn3');
+    if (selectedGenes.includes('lrp5')) painGenes.push('lrp5');
+    if (selectedGenes.includes('fam178b')) painGenes.push('fam178b');
+    conflicts.push({
+      id: 'faahout-trauma',
+      title: 'Silent Tissue Failure Warning',
+      severity: 'High Risk',
+      synergyPenalty: 15,
+      conflictingGenes: painGenes,
+      summary:
+        'Disabling nociception (FAAH-OUT) removes biological warning signals needed to limit high-force physical exertion.',
+      evolutionaryReason:
+        'Without acute pain alarms, explosive muscle tears (ACTN3), heavy joint loads (LRP5), or deep-water barotrauma (FAM178B) accumulate unnoticed into catastrophic injury.',
+    });
+  }
+
+  return conflicts;
+}
+
 export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
   selectedGenes: controlledGenes,
   onChangeSelectedGenes,
@@ -439,8 +530,68 @@ export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copiedShareUrl, setCopiedShareUrl] = useState<boolean>(false);
   const [showShareUrlBar, setShowShareUrlBar] = useState<boolean>(false);
-  const [dangerAlerts, setDangerAlerts] = useState<string[]>([]);
-  const [compIndex, setCompIndex] = useState<number>(100);
+  const [conflictOverlayOpen, setConflictOverlayOpen] = useState<boolean>(false);
+  const prevConflictIdsRef = useRef<string[]>([]);
+
+  const activeConflicts = useMemo(
+    () => evaluateBiologicalConflicts(selectedGenes),
+    [selectedGenes]
+  );
+
+  const conflictingGeneSet = useMemo(() => {
+    const set = new Set<string>();
+    activeConflicts.forEach((c) => c.conflictingGenes.forEach((g) => set.add(g)));
+    return set;
+  }, [activeConflicts]);
+
+  const compIndex = useMemo(() => {
+    const penalty = activeConflicts.reduce((sum, c) => sum + c.synergyPenalty, 0);
+    return Math.max(10, 100 - penalty);
+  }, [activeConflicts]);
+
+  const metrics = useMemo(() => {
+    const baseMetrics = { oxygen: 30, bones: 30, sleep: 30, pain: 30, speed: 30, buoyancy: 50 };
+    selectedGenes.forEach((geneId) => {
+      const gene = SUPERHUMAN_GENES.find((g) => g.id === geneId);
+      if (gene) {
+        baseMetrics.oxygen = Math.max(0, Math.min(100, baseMetrics.oxygen + gene.impact.oxygen));
+        baseMetrics.bones = Math.max(0, Math.min(100, baseMetrics.bones + gene.impact.bones));
+        baseMetrics.sleep = Math.max(0, Math.min(100, baseMetrics.sleep + gene.impact.sleep));
+        baseMetrics.pain = Math.max(0, Math.min(100, baseMetrics.pain + gene.impact.pain));
+        baseMetrics.speed = Math.max(0, Math.min(100, baseMetrics.speed + gene.impact.speed));
+        baseMetrics.buoyancy = Math.max(0, Math.min(100, baseMetrics.buoyancy + gene.impact.buoyancy));
+      }
+    });
+    // Reflect ACTN3 + LRP5 inertial speed drag in live output
+    if (selectedGenes.includes('actn3') && selectedGenes.includes('lrp5')) {
+      baseMetrics.speed = Math.max(15, baseMetrics.speed - 25);
+    }
+    return baseMetrics;
+  }, [selectedGenes]);
+
+  // Automatically trigger the Biological Conflict Warning overlay when a NEW conflict is introduced
+  useEffect(() => {
+    const currentIds = activeConflicts.map((c) => c.id);
+    const prevIds = prevConflictIdsRef.current;
+    const hasNewConflict = currentIds.some((id) => !prevIds.includes(id));
+
+    if (hasNewConflict) {
+      setConflictOverlayOpen(true);
+    } else if (currentIds.length === 0) {
+      setConflictOverlayOpen(false);
+    }
+    prevConflictIdsRef.current = currentIds;
+  }, [activeConflicts]);
+
+  // Support Escape key dismissal for the conflict overlay
+  useEffect(() => {
+    if (!conflictOverlayOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConflictOverlayOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [conflictOverlayOpen]);
 
   const shareUrl = useMemo(
     () =>
@@ -461,16 +612,6 @@ export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
     }
   };
 
-  // Aggregated physical metrics based on active splicing
-  const [metrics, setMetrics] = useState({
-    oxygen: 30, // baseline
-    bones: 30,
-    sleep: 30,
-    pain: 30,
-    speed: 30,
-    buoyancy: 50 // baseline middle
-  });
-
   const handleToggleGene = (id: string) => {
     setSaveMessage(null);
     setSaveError(null);
@@ -479,12 +620,17 @@ export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
     );
   };
 
+  const handleRemoveConflictingGene = (geneId: string) => {
+    setSelectedGenes((prev) => prev.filter((g) => g !== geneId));
+  };
+
   const handleClear = () => {
     setSelectedGenes([]);
     setProfileLabel('');
     setProfileNotes('');
     setSaveMessage(null);
     setSaveError(null);
+    setConflictOverlayOpen(false);
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -517,56 +663,127 @@ export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
     }
   };
 
-  // Run business logic on combining genes
-  useEffect(() => {
-    const baseMetrics = { oxygen: 30, bones: 30, sleep: 30, pain: 30, speed: 30, buoyancy: 50 };
-    let finalComp = 100;
-    const alerts: string[] = [];
-
-    selectedGenes.forEach((geneId) => {
-      const gene = SUPERHUMAN_GENES.find((g) => g.id === geneId);
-      if (gene) {
-        baseMetrics.oxygen = Math.max(0, Math.min(100, baseMetrics.oxygen + gene.impact.oxygen));
-        baseMetrics.bones = Math.max(0, Math.min(100, baseMetrics.bones + gene.impact.bones));
-        baseMetrics.sleep = Math.max(0, Math.min(100, baseMetrics.sleep + gene.impact.sleep));
-        baseMetrics.pain = Math.max(0, Math.min(100, baseMetrics.pain + gene.impact.pain));
-        baseMetrics.speed = Math.max(0, Math.min(100, baseMetrics.speed + gene.impact.speed));
-        baseMetrics.buoyancy = Math.max(0, Math.min(100, baseMetrics.buoyancy + gene.impact.buoyancy));
-      }
-    });
-
-    // 1. Check for Sinking Sprinter Paradox (LRP5 bone density + FAM178B diving)
-    if (selectedGenes.includes('lrp5') && selectedGenes.includes('fam178b')) {
-      alerts.push(
-        "🚨 THE SINKING SPRINTER PARADOX: Heavy skeleton density from LRP5 destroys your natural buoyancy. Staying afloat requires massive muscular strain, neutralizing the breath-hold capability of FAM178B."
-      );
-      finalComp -= 30;
-    }
-
-    // 2. Check for Oxygen Paradox (ACTN3 sprinter fast-twitch + EPAS1 altitude or FAM178B diving)
-    if (selectedGenes.includes('actn3') && (selectedGenes.includes('epas1') || selectedGenes.includes('fam178b'))) {
-      alerts.push(
-        "🚨 THE OXYGEN PARADOX: Explosive fast-twitch muscle fibers from ACTN3 devour oxygen at a ferocious rate. This instantly drains the oxygen-conserving efficiency required for high altitude (EPAS1) or deep dives (FAM178B)."
-      );
-      finalComp -= 30;
-    }
-
-    // 3. Check for FAAH-OUT No-Pain danger + high athletic power
-    if (selectedGenes.includes('faahout') && (selectedGenes.includes('actn3') || selectedGenes.includes('fam178b'))) {
-      alerts.push(
-        "⚠️ UNDETECTED TISSUE DAMAGE: Lacking physical pain receptors (FAAH-OUT) means you cannot detect explosive muscle tearing (ACTN3) or dangerous pressure builds in deep water (FAM178B), resulting in catastrophic, unnoticed tissue failure."
-      );
-      finalComp -= 15;
-    }
-
-    // Prevent negative index
-    setCompIndex(Math.max(10, finalComp));
-    setMetrics(baseMetrics);
-    setDangerAlerts(alerts);
-  }, [selectedGenes]);
-
   return (
-    <div className="flex flex-col p-6 bg-white rounded-xl shadow-sm border border-stone-200 w-full max-w-3xl mx-auto my-6">
+    <div className="relative flex flex-col p-6 bg-white rounded-xl shadow-sm border border-stone-200 w-full max-w-3xl mx-auto my-6">
+      {/* Dynamic Biological Conflict Warning UI Overlay */}
+      <AnimatePresence>
+        {conflictOverlayOpen && activeConflicts.length > 0 && (
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="biological-conflict-title"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16 }}
+            className="absolute inset-0 z-30 bg-stone-950/55 backdrop-blur-[3px] rounded-xl flex items-center justify-center p-4 sm:p-6"
+            onClick={() => setConflictOverlayOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 8 }}
+              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-lg bg-white border border-red-200 rounded-xl shadow-2xl overflow-hidden max-h-[90%] flex flex-col"
+            >
+              {/* Overlay Header */}
+              <div className="px-5 py-4 bg-red-50/80 border-b border-red-200/80 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <ShieldAlert size={18} className="text-red-700 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-[11px] font-mono text-red-700">
+                      Biological Conflict Warning · {activeConflicts.length}{' '}
+                      {activeConflicts.length === 1 ? 'Incompatibility' : 'Incompatibilities'}
+                    </p>
+                    <h4
+                      id="biological-conflict-title"
+                      className="font-serif text-lg font-semibold text-stone-900 leading-snug mt-0.5"
+                    >
+                      Mutually Exclusive Genetic Combination
+                    </h4>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setConflictOverlayOpen(false)}
+                  aria-label="Close biological conflict warning"
+                  className="p-1.5 text-stone-500 hover:text-stone-900 rounded-lg hover:bg-red-100/70 transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Conflict Details List */}
+              <div className="px-5 py-4 space-y-4 overflow-y-auto">
+                {activeConflicts.map((conflict) => {
+                  const geneObjects = conflict.conflictingGenes
+                    .map((gid) => SUPERHUMAN_GENES.find((g) => g.id === gid))
+                    .filter((g): g is GeneInfo => Boolean(g));
+
+                  return (
+                    <div
+                      key={conflict.id}
+                      className="p-4 bg-stone-50 border border-stone-200 rounded-lg space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-serif font-semibold text-stone-900">
+                            {conflict.title}
+                          </div>
+                          <div className="text-[11px] font-mono text-stone-500 mt-0.5">
+                            {geneObjects.map((g) => g.geneName).join(' × ')} · {conflict.severity}
+                          </div>
+                        </div>
+                        <span className="text-xs font-mono font-semibold tabular-nums text-red-700 shrink-0">
+                          -{conflict.synergyPenalty}% synergy
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-stone-700 leading-relaxed">
+                        {conflict.summary}
+                      </p>
+                      <p className="text-[11px] text-stone-500 leading-relaxed border-t border-stone-200/70 pt-2">
+                        <span className="font-medium text-stone-700">Why nature disallows this: </span>
+                        {conflict.evolutionaryReason}
+                      </p>
+
+                      {/* Direct One-Click Conflict Resolution Buttons */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        {geneObjects.map((gene) => (
+                          <button
+                            key={gene.id}
+                            type="button"
+                            onClick={() => handleRemoveConflictingGene(gene.id)}
+                            className="px-3 py-1.5 bg-white hover:bg-stone-100 border border-stone-300 text-stone-800 text-xs font-medium rounded-lg transition-colors whitespace-nowrap"
+                          >
+                            Remove {gene.geneName}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Overlay Footer */}
+              <div className="px-5 py-3.5 bg-stone-50 border-t border-stone-200 flex items-center justify-between gap-3">
+                <span className="text-xs font-mono tabular-nums text-stone-500">
+                  Synergy Index: <strong className="text-red-700">{compIndex}%</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConflictOverlayOpen(false)}
+                  className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white text-xs font-medium rounded-lg transition-colors whitespace-nowrap"
+                >
+                  Keep Spliced &amp; Inspect Trade-offs
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-6">
         <div>
           <h3 className="font-serif text-xl font-medium text-stone-900">CRISPR Splicing & Compatibility Simulator</h3>
@@ -617,21 +834,38 @@ export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
           
           {SUPERHUMAN_GENES.map((gene) => {
             const isActive = selectedGenes.includes(gene.id);
+            const hasConflict = isActive && conflictingGeneSet.has(gene.id);
             return (
               <button
                 key={gene.id}
+                type="button"
                 onClick={() => handleToggleGene(gene.id)}
-                className={`flex justify-between items-center p-3 rounded-lg border text-left transition-all ${isActive ? 'bg-stone-900 text-white border-stone-900 shadow-md ring-1 ring-nobel-gold/50' : 'bg-stone-50 hover:bg-stone-100 border-stone-200 text-stone-700'}`}
+                className={`flex justify-between items-center p-3 rounded-lg border text-left transition-all ${
+                  hasConflict
+                    ? 'bg-stone-900 text-white border-red-500/80 shadow-sm ring-1 ring-red-400/50'
+                    : isActive
+                      ? 'bg-stone-900 text-white border-stone-900 shadow-sm ring-1 ring-nobel-gold/50'
+                      : 'bg-stone-50 hover:bg-stone-100 border-stone-200 text-stone-700'
+                }`}
               >
                 <div>
-                  <div className="text-[10px] font-mono uppercase tracking-wider opacity-60">
-                    {gene.chromosome} • {gene.geneName}
+                  <div className="text-[10px] font-mono uppercase tracking-wider opacity-70 flex items-center gap-1.5">
+                    <span>{gene.chromosome} • {gene.geneName}</span>
+                    {hasConflict && (
+                      <span className="text-red-300 font-semibold">· Conflict</span>
+                    )}
                   </div>
                   <div className="text-xs font-bold font-serif leading-tight mt-0.5">{gene.name}</div>
                 </div>
                 
-                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${isActive ? 'border-nobel-gold bg-nobel-gold/20 text-nobel-gold' : 'border-stone-300 bg-white'}`}>
-                  {isActive ? <Zap size={10} /> : <div className="w-1.5 h-1.5 bg-transparent rounded-full" />}
+                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                  hasConflict
+                    ? 'border-red-400 bg-red-500/20 text-red-300'
+                    : isActive
+                      ? 'border-nobel-gold bg-nobel-gold/20 text-nobel-gold'
+                      : 'border-stone-300 bg-white'
+                }`}>
+                  {hasConflict ? <AlertTriangle size={11} /> : isActive ? <Zap size={10} /> : <div className="w-1.5 h-1.5 bg-transparent rounded-full" />}
                 </div>
               </button>
             );
@@ -695,34 +929,53 @@ export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
           {/* Dangers & Warnings Area */}
           <div className="mt-6">
             <AnimatePresence mode="wait">
-              {dangerAlerts.length > 0 ? (
+              {activeConflicts.length > 0 ? (
                 <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="bg-red-50 border-l-4 border-red-500 p-3 rounded-r-lg space-y-2 max-h-48 overflow-y-auto"
+                  key="conflict-summary"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="bg-red-50 border border-red-200 p-3.5 rounded-lg space-y-2.5"
                 >
-                  <div className="text-[10px] font-mono text-red-700 font-bold tracking-wider flex items-center gap-1">
-                    <AlertTriangle size={12} /> BIOLOGICAL INCOMPATIBILITIES DETECTED
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-[11px] font-mono text-red-800 font-semibold flex items-center gap-1.5">
+                      <AlertTriangle size={13} />
+                      <span>
+                        Biological Conflict Warning ({activeConflicts.length})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setConflictOverlayOpen(true)}
+                      className="text-[11px] font-medium text-red-800 underline underline-offset-2 hover:text-red-950 transition-colors whitespace-nowrap"
+                    >
+                      Open Warning Overlay
+                    </button>
                   </div>
-                  {dangerAlerts.map((alert, index) => (
-                    <p key={index} className="text-[10px] text-red-600 leading-normal">{alert}</p>
-                  ))}
+                  <div className="space-y-1.5">
+                    {activeConflicts.map((conflict) => (
+                      <p key={conflict.id} className="text-[11px] text-red-700 leading-snug">
+                        <strong className="font-semibold">{conflict.title}:</strong>{' '}
+                        {conflict.summary}
+                      </p>
+                    ))}
+                  </div>
                 </motion.div>
               ) : selectedGenes.length > 0 ? (
                 <motion.div
+                  key="splicing-stable"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="bg-green-50 border-l-4 border-green-500 p-3 rounded-r-lg text-green-700 text-[10px] leading-relaxed flex items-center gap-2"
+                  className="bg-teal-50/70 border border-teal-200 p-3.5 rounded-lg text-teal-900 text-[11px] leading-relaxed flex items-center gap-2"
                 >
-                  <ShieldCheck size={14} className="shrink-0" />
+                  <ShieldCheck size={15} className="shrink-0 text-teal-700" />
                   <div>
-                    <strong>Splicing Stable:</strong> The current combination shows no lethal antagonistic biological trade-offs. The edited cell matrix remains metabolically viable.
+                    <strong>Splicing Stable:</strong> The current combination shows no antagonistic biological trade-offs. The edited profile remains metabolically viable.
                   </div>
                 </motion.div>
               ) : (
-                <div className="border border-dashed border-stone-300 p-4 text-center rounded-lg text-stone-400 text-xs font-serif italic">
-                  Select mutations from the Left Panel to begin CRISPR recombination.
+                <div className="border border-dashed border-stone-300 p-4 text-center rounded-lg text-stone-500 text-xs font-serif italic">
+                  Select mutations from the Gene Splicing Vault to begin CRISPR recombination.
                 </div>
               )}
             </AnimatePresence>

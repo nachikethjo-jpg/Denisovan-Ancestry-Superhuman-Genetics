@@ -75,6 +75,16 @@ export const GeneticAgeCalculator: React.FC<GeneticAgeCalculatorProps> = ({
     }
 
     // Antagonistic trade-off penalties synced with CRISPR Lab paradoxes
+    if (selectedGenes.includes('actn3') && selectedGenes.includes('lrp5')) {
+      factors.push({
+        id: 'paradox-inertia',
+        label: 'Inertial Acceleration Conflict (ACTN3 + LRP5)',
+        rateDelta: 0.07,
+        mechanism: 'Heavy skeletal limb inertia elevates tendon shear and joint impact wear during explosive bursts.',
+        isPenalty: true,
+      });
+    }
+
     if (selectedGenes.includes('lrp5') && selectedGenes.includes('fam178b')) {
       factors.push({
         id: 'paradox-sinking',
@@ -100,13 +110,15 @@ export const GeneticAgeCalculator: React.FC<GeneticAgeCalculatorProps> = ({
 
     if (
       selectedGenes.includes('faahout') &&
-      (selectedGenes.includes('actn3') || selectedGenes.includes('fam178b'))
+      (selectedGenes.includes('actn3') ||
+        selectedGenes.includes('fam178b') ||
+        selectedGenes.includes('lrp5'))
     ) {
       factors.push({
         id: 'paradox-damage',
         label: 'Unmonitored Tissue Trauma (FAAH-OUT conflict)',
         rateDelta: 0.11,
-        mechanism: 'Missing nociception masks repetitive muscle tears and pressure injury.',
+        mechanism: 'Missing nociception masks repetitive muscle tears, joint impingement, and pressure injury.',
         isPenalty: true,
       });
     }
