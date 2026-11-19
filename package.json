@@ -6,11 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "tsc --noEmit && eslint firestore.rules"
   },
   "dependencies": {
+    "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
+    "@types/d3": "^7.4.3",
+    "d3": "^7.9.2",
+    "eslint": "^10.15.0",
+    "firebase": "^13.4.0",
     "framer-motion": "^12.23.24",
     "lucide-react": "^0.553.0",
     "motion": "^12.41.0",

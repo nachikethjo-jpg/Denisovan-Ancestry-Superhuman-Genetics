@@ -13,26 +13,39 @@ import {
   SUPERHUMAN_GENES, 
   GeneInfo 
 } from './components/Diagrams';
+import { DenisovanBubbleChart } from './components/DenisovanBubbleChart';
+import { GeneticTerm } from './components/GeneticTermOverlay';
+import { useFirebase } from './components/FirebaseProvider';
+import { ResearchNotebookDrawer } from './components/ResearchNotebookDrawer';
+import { parseShareStateFromSearch, syncUrlWithState } from './utils/shareState';
 import { 
   ArrowDown, 
   Menu, 
   X, 
-  Layers, 
-  TrendingUp, 
   ShieldAlert, 
   Compass, 
-  CheckCircle, 
-  HelpCircle,
-  Dna,
   Heart,
-  Eye,
-  Settings
+  BookMarked,
+  LogIn,
+  Link2
 } from 'lucide-react';
 
 const App: React.FC = () => {
+  const { user, signingIn, authError, signInWithGoogle, savedGenomes, savedTerms } = useFirebase();
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notebookOpen, setNotebookOpen] = useState(false);
   
+  // Parse initial URL state once for shareable links (?genes=...&gwas=...)
+  const [initialUrlState] = useState(() =>
+    typeof window !== 'undefined'
+      ? parseShareStateFromSearch(window.location.search)
+      : { genes: [], gwasGeneId: null, hasSharedParams: false }
+  );
+  const [sharedBannerVisible, setSharedBannerVisible] = useState<boolean>(
+    initialUrlState.hasSharedParams
+  );
+
   // Altitude Section State
   const [altitude, setAltitude] = useState<number>(14000); // 14,000 feet default (Tibetan Plateau)
   const [isTibetan, setIsTibetan] = useState<boolean>(true);
@@ -40,8 +53,58 @@ const App: React.FC = () => {
   // Dive Section State
   const [diveDepth, setDiveDepth] = useState<number>(150); // 150 feet default
   
-  // GWAS selected gene
-  const [selectedGene, setSelectedGene] = useState<GeneInfo | null>(SUPERHUMAN_GENES[0]);
+  // GWAS selected gene (hydrated from URL if shared)
+  const [selectedGene, setSelectedGene] = useState<GeneInfo | null>(() => {
+    if (initialUrlState.gwasGeneId) {
+      const matched = SUPERHUMAN_GENES.find((g) => g.id === initialUrlState.gwasGeneId);
+      if (matched) return matched;
+    }
+    return SUPERHUMAN_GENES[0];
+  });
+
+  // CRISPR Lab synced state (hydrated from URL if shared)
+  const [labSelectedGenes, setLabSelectedGenes] = useState<string[]>(
+    () => initialUrlState.genes
+  );
+
+  // Synchronize URL query parameters whenever CRISPR Lab or GWAS selection changes
+  useEffect(() => {
+    syncUrlWithState({
+      genes: labSelectedGenes,
+      gwasGeneId: selectedGene?.id ?? null,
+    });
+  }, [labSelectedGenes, selectedGene]);
+
+  // Smoothly scroll to the target section when arriving from a shared configuration URL
+  useEffect(() => {
+    if (!initialUrlState.hasSharedParams) return;
+    const hashTarget = window.location.hash.replace('#', '');
+    const targetId =
+      hashTarget === 'gwas' || hashTarget === 'crispr'
+        ? hashTarget
+        : initialUrlState.genes.length > 0
+          ? 'crispr'
+          : 'gwas';
+
+    const timer = window.setTimeout(() => {
+      const element = document.getElementById(targetId);
+      if (element) {
+        const offsetPosition = element.getBoundingClientRect().top + window.pageYOffset - 80;
+        window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
+      }
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [initialUrlState]);
+
+  const handleLoadGenomeIntoLab = (geneIds: string[]) => {
+    setLabSelectedGenes(geneIds);
+    const element = document.getElementById('crispr');
+    if (element) {
+      const offsetPosition = element.getBoundingClientRect().top + window.pageYOffset - 80;
+      window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -69,34 +132,75 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#F9F8F4] text-stone-800 selection:bg-stone-900 selection:text-white antialiased">
       
       {/* Navigation */}
-      <nav className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-[#F9F8F4]/90 backdrop-blur-md shadow-sm py-3 border-b border-stone-200/50' : 'bg-transparent py-5'}`}>
-        <div className="container mx-auto px-6 flex justify-between items-center">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-            <div className="w-8 h-8 bg-stone-900 rounded-full flex items-center justify-center text-white font-serif font-bold text-lg shadow-sm pb-0.5">🧬</div>
-            <span className="font-serif font-bold text-base tracking-wider text-stone-900">
-              GENE.MOSAIC <span className="font-normal text-stone-500 text-xs tracking-normal">2026</span>
-            </span>
-          </div>
+      <nav className={`fixed top-0 left-0 right-0 z-40 transition-all duration-300 ${scrolled ? 'bg-[#F9F8F4]/95 backdrop-blur-md shadow-xs py-3 border-b border-stone-200/70' : 'bg-[#141413]/75 backdrop-blur-sm py-4 border-b border-white/10'}`}>
+        <div className="container mx-auto px-6 flex justify-between items-center gap-8">
+          {/* Zone 1: Single-line Brand Wordmark */}
+          <button
+            type="button"
+            className={`font-serif font-bold text-base tracking-wider whitespace-nowrap shrink-0 cursor-pointer ${scrolled ? 'text-stone-900' : 'text-stone-100'}`}
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          >
+            GENE.MOSAIC
+          </button>
           
-          <div className="hidden md:flex items-center gap-7 text-xs font-semibold tracking-widest text-stone-600">
-            <a href="#intro" onClick={scrollToSection('intro')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase">Legacy</a>
-            <a href="#sky-sea" onClick={scrollToSection('sky-sea')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase">Sky & Sea</a>
-            <a href="#gwas" onClick={scrollToSection('gwas')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase">GWAS Peak</a>
-            <a href="#crispr" onClick={scrollToSection('crispr')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase">CRISPR Lab</a>
-            <a href="#ethics" onClick={scrollToSection('ethics')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase">Ethics</a>
-            <a 
-              href="#crispr" 
-              onClick={scrollToSection('crispr')} 
-              className="px-4 py-2 bg-stone-900 text-white rounded-full hover:bg-stone-800 transition-colors shadow-sm text-[10px] tracking-widest uppercase"
-            >
-              Splice Genome
-            </a>
+          {/* Zone 2: 5 Concise Single-Line Links */}
+          <div className={`hidden md:flex items-center gap-7 text-xs font-medium tracking-wide ${scrolled ? 'text-stone-600' : 'text-stone-300'}`}>
+            <a href="#intro" onClick={scrollToSection('intro')} className={`transition-colors whitespace-nowrap shrink-0 ${scrolled ? 'hover:text-stone-900' : 'hover:text-white'}`}>Denisovan Legacy</a>
+            <a href="#sky-sea" onClick={scrollToSection('sky-sea')} className={`transition-colors whitespace-nowrap shrink-0 ${scrolled ? 'hover:text-stone-900' : 'hover:text-white'}`}>Sky & Sea</a>
+            <a href="#gwas" onClick={scrollToSection('gwas')} className={`transition-colors whitespace-nowrap shrink-0 ${scrolled ? 'hover:text-stone-900' : 'hover:text-white'}`}>GWAS Plot</a>
+            <a href="#crispr" onClick={scrollToSection('crispr')} className={`transition-colors whitespace-nowrap shrink-0 ${scrolled ? 'hover:text-stone-900' : 'hover:text-white'}`}>CRISPR Lab</a>
+            <a href="#ethics" onClick={scrollToSection('ethics')} className={`transition-colors whitespace-nowrap shrink-0 ${scrolled ? 'hover:text-stone-900' : 'hover:text-white'}`}>Ethics</a>
           </div>
 
-          <button className="md:hidden text-stone-900 p-2" onClick={() => setMenuOpen(!menuOpen)}>
+          {/* Zone 3: 1 Primary Action (Google Auth / Research Notebook) */}
+          <div className="hidden md:flex items-center shrink-0">
+            {user ? (
+              <button
+                type="button"
+                onClick={() => setNotebookOpen(true)}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                  scrolled
+                    ? 'bg-stone-900 text-white hover:bg-stone-800'
+                    : 'bg-white text-stone-900 hover:bg-stone-100'
+                }`}
+              >
+                <BookMarked size={14} />
+                <span>Notebook ({savedGenomes.length + savedTerms.length})</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={signingIn}
+                onClick={() => signInWithGoogle()}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 disabled:opacity-60 ${
+                  scrolled
+                    ? 'bg-stone-900 text-white hover:bg-stone-800'
+                    : 'bg-white text-stone-900 hover:bg-stone-100'
+                }`}
+              >
+                <LogIn size={14} />
+                <span>{signingIn ? 'Signing in...' : 'Sign in with Google'}</span>
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            aria-label="Toggle menu"
+            className={`md:hidden p-2 ${scrolled ? 'text-stone-900' : 'text-stone-100'}`}
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
         </div>
+
+        {authError && (
+          <div className="container mx-auto px-6 pt-2">
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 inline-block">
+              {authError}
+            </p>
+          </div>
+        )}
       </nav>
 
       {/* Mobile Menu */}
@@ -106,23 +210,47 @@ const App: React.FC = () => {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="fixed inset-0 z-40 bg-[#F9F8F4] flex flex-col items-center justify-center gap-6 text-lg font-serif"
+            className="fixed inset-0 z-30 bg-[#F9F8F4] flex flex-col items-center justify-center gap-6 text-lg font-serif"
           >
-            <a href="#intro" onClick={scrollToSection('intro')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase text-stone-500">Denisovan Legacy</a>
-            <a href="#sky-sea" onClick={scrollToSection('sky-sea')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase text-stone-500">Sky & Sea</a>
-            <a href="#gwas" onClick={scrollToSection('gwas')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase text-stone-500">GWAS Discovery</a>
-            <a href="#crispr" onClick={scrollToSection('crispr')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase text-stone-500">CRISPR Lab</a>
-            <a href="#ethics" onClick={scrollToSection('ethics')} className="hover:text-stone-900 transition-colors cursor-pointer uppercase text-stone-500">Ethics & Risks</a>
-            <a 
-              href="#crispr" 
-              onClick={scrollToSection('crispr')} 
-              className="px-6 py-2.5 bg-stone-900 text-white rounded-full shadow-lg text-xs tracking-widest uppercase mt-4"
-            >
-              Splice Genome
-            </a>
+            <a href="#intro" onClick={scrollToSection('intro')} className="hover:text-stone-900 transition-colors cursor-pointer text-stone-700">Denisovan Legacy</a>
+            <a href="#sky-sea" onClick={scrollToSection('sky-sea')} className="hover:text-stone-900 transition-colors cursor-pointer text-stone-700">Sky & Sea</a>
+            <a href="#gwas" onClick={scrollToSection('gwas')} className="hover:text-stone-900 transition-colors cursor-pointer text-stone-700">GWAS Discovery</a>
+            <a href="#crispr" onClick={scrollToSection('crispr')} className="hover:text-stone-900 transition-colors cursor-pointer text-stone-700">CRISPR Lab</a>
+            <a href="#ethics" onClick={scrollToSection('ethics')} className="hover:text-stone-900 transition-colors cursor-pointer text-stone-700">Ethics & Risks</a>
+            {user ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setNotebookOpen(true);
+                }}
+                className="px-6 py-2.5 bg-stone-900 text-white rounded-lg text-xs font-sans font-medium mt-4"
+              >
+                Open Notebook ({savedGenomes.length + savedTerms.length})
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  signInWithGoogle();
+                }}
+                className="px-6 py-2.5 bg-stone-900 text-white rounded-lg text-xs font-sans font-medium mt-4"
+              >
+                Sign in with Google
+              </button>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Synced Research Notebook Slide-Over */}
+      <ResearchNotebookDrawer
+        open={notebookOpen}
+        onClose={() => setNotebookOpen(false)}
+        onLoadGenome={handleLoadGenomeIntoLab}
+        activeGwasGeneId={selectedGene?.id ?? null}
+      />
 
       {/* Hero Section */}
       <header className="relative h-screen flex items-center justify-center overflow-hidden bg-[#141413]">
@@ -154,33 +282,43 @@ const App: React.FC = () => {
       </header>
 
       <main>
-        {/* Intro Section */}
+        {/* Intro / Denisovan Legacy Section */}
         <section id="intro" className="py-24 bg-white border-b border-stone-200">
           <div className="container mx-auto px-6 md:px-12 grid grid-cols-1 md:grid-cols-12 gap-12 items-start">
             <div className="md:col-span-5">
-              <span className="text-[10px] font-bold tracking-widest text-stone-400 uppercase">Adaptive Introgression</span>
+              <span className="text-xs font-mono text-stone-500">Denisovan Legacy · Adaptive Introgression</span>
               <h2 className="font-serif text-3xl md:text-4xl mb-6 leading-tight text-stone-900 mt-1">The Mosaic Hominin</h2>
               <div className="w-12 h-1 bg-stone-900 mb-6"></div>
-              <p className="text-sm text-stone-500 leading-relaxed font-light">
-                Modern humans are not a single, isolated branch on the evolutionary tree, but rather a complex genetic mosaic. Through <strong className="text-stone-800 font-semibold">adaptive introgression</strong>, interbreeding with extinct sister species introduced powerful, ready-made genetic variants that natural selection carved into survival tools.
+              <p className="text-sm text-stone-600 leading-relaxed font-light">
+                Modern humans are not a single, isolated branch on the evolutionary tree, but rather a complex genetic mosaic. Through{' '}
+                <GeneticTerm termKey="adaptive-introgression">adaptive introgression</GeneticTerm>, interbreeding with extinct sister species introduced powerful, ready-made genetic variants that natural selection carved into survival tools shaping extreme human{' '}
+                <GeneticTerm termKey="phenotype">phenotypes</GeneticTerm>.
+              </p>
+              <p className="text-xs text-stone-500 mt-4">
+                Tip: Hover or focus on any dotted genetic term across this report to view its plain-English definition card and save it to your notebook.
               </p>
             </div>
             
             <div className="md:col-span-7 text-sm text-stone-600 leading-relaxed space-y-6">
               <p>
-                <span className="text-4xl float-left mr-3 mt-[-4px] font-serif text-stone-900 font-bold">W</span>hen geneticists sequenced the specific Tibetan variant of the <strong className="text-stone-900 font-semibold">EPAS1 gene</strong>, they discovered it was so profoundly divergent from other modern human DNA that simple recent mutation was statistically impossible.
+                <span className="text-4xl float-left mr-3 mt-[-4px] font-serif text-stone-900 font-bold">W</span>hen geneticists sequenced the specific Tibetan{' '}
+                <GeneticTerm termKey="haplotype">haplotype</GeneticTerm> of the{' '}
+                <GeneticTerm termKey="epas1">EPAS1 gene</GeneticTerm>, they discovered it was so profoundly divergent from other modern human DNA that simple recent mutation was statistically impossible.
               </p>
               <p>
-                In 2014, researchers discovered a near-perfect match in the DNA of a <strong className="text-stone-900 font-semibold">Denisovan</strong>—an extinct hominin whose fossil remains were found in a Siberian cave. Early Sapiens pioneers interbred with Denisovans, incorporating these genes. Later, as humans ascended the high Tibetan Plateau and settled Southeast Asia’s archipelagos, this dormant genetic legacy was activated.
+                In 2014, researchers discovered a near-perfect match in the DNA of a <strong className="text-stone-900 font-semibold">Denisovan</strong>—an extinct hominin whose fossil remains were found in a Siberian cave. Early Sapiens pioneers interbred with Denisovans in ancient{' '}
+                <GeneticTerm termKey="admixture">admixture</GeneticTerm> events, incorporating these genes via{' '}
+                <GeneticTerm termKey="recombination">recombination</GeneticTerm>. Later, as humans ascended the high Tibetan Plateau and settled Southeast Asia’s archipelagos, this dormant genetic legacy was activated.
               </p>
               <p className="text-stone-500 italic">
-                Below, click through the steps of this epic evolutionary transaction to see how genes travelled thousands of years to conquer both sky and sea.
+                Explore the evolutionary sequence and the D3 paleogenomic bubble chart below to see how much ancient hominin DNA survives across living human populations.
               </p>
             </div>
           </div>
           
-          <div className="mt-12">
+          <div className="mt-12 px-6">
             <AdaptiveIntrogressionDiagram />
+            <DenisovanBubbleChart />
           </div>
         </section>
 
@@ -207,7 +345,8 @@ const App: React.FC = () => {
                   
                   <h3 className="font-serif text-xl mt-3 text-stone-900">Tibet's Hypoxia Defense</h3>
                   <p className="text-xs text-stone-500 leading-relaxed mt-2">
-                    For lowland humans, oxygen depletion at extreme altitudes forces the body to overproduce red blood cells. This thickens the blood, leading to blood clots, strokes, and chronic mountain sickness. Tibetans carry the Denisovan <strong className="text-stone-800">EPAS1</strong> variant, which prevents this hyper-response, allowing thin, highly efficient blood flow in thin air.
+                    For lowland humans, oxygen depletion (<GeneticTerm termKey="hypoxia">hypoxia</GeneticTerm>) at extreme altitudes forces the body to overproduce red blood cells. This thickens the blood, leading to blood clots, strokes, and chronic mountain sickness. Tibetans carry the Denisovan{' '}
+                    <GeneticTerm termKey="epas1">EPAS1</GeneticTerm> variant, which prevents this hyper-response, allowing thin, highly efficient blood flow in thin air.
                   </p>
 
                   {/* Interactivity controls */}
@@ -271,7 +410,8 @@ const App: React.FC = () => {
 
                   <h3 className="font-serif text-xl mt-3 text-stone-900">Sea Nomad Spleen & CO₂ Buffer</h3>
                   <p className="text-xs text-stone-500 leading-relaxed mt-2">
-                    The Bajau "Sea Nomads" spend up to 60% of their working day diving to extreme depths. They possess a thyroid-related gene mutation (<strong className="text-stone-800">PDE10A</strong>) which expands their spleen by 50% to act as a biological scuba tank of red blood cells. Crucially, they also inherited a Denisovan variant of the <strong className="text-stone-800">FAM178B</strong> gene, which buffers CO₂ buildup to keep blood from becoming acidic and prevent breath-hold panic.
+                    The Bajau "Sea Nomads" spend up to 60% of their working day diving to extreme depths. They possess a thyroid-related gene mutation (<GeneticTerm termKey="pde10a">PDE10A</GeneticTerm>) which expands their spleen by 50% to act as a biological scuba tank of red blood cells. Crucially, they also inherited a Denisovan variant of the{' '}
+                    <GeneticTerm termKey="fam178b">FAM178B</GeneticTerm> gene, which buffers CO₂ buildup to keep blood from becoming acidic and prevent breath-hold panic.
                   </p>
 
                   {/* Interactivity controls */}
@@ -319,29 +459,49 @@ const App: React.FC = () => {
         <section id="gwas" className="py-24 bg-white border-b border-stone-200">
           <div className="container mx-auto px-6">
             <div className="text-center max-w-xl mx-auto mb-12">
-              <span className="text-[10px] font-bold tracking-widest text-stone-400 uppercase">Genome-Wide Association Study</span>
+              <span className="text-xs font-mono text-stone-500">Genome-Wide Association Study</span>
               <h2 className="font-serif text-3xl md:text-4xl mt-1 text-stone-900">Mapping the Superhuman Baselines</h2>
-              <p className="text-xs text-stone-500 mt-2">
-                We discover these traits by comparison baselines. Click on the Manhattan peaks below to isolate specific mutations discovered in outliers of the general population.
+              <p className="text-xs text-stone-500 mt-2 leading-relaxed">
+                Researchers uncover rare traits using a{' '}
+                <GeneticTerm termKey="gwas">GWAS</GeneticTerm> baseline comparison. Click on the Manhattan peaks below to isolate specific mutations linked to outlier{' '}
+                <GeneticTerm termKey="phenotype">phenotypes</GeneticTerm>.
               </p>
             </div>
 
-            <ManhattanPlotDiagram onSelectGene={setSelectedGene} selectedGene={selectedGene} />
+            <ManhattanPlotDiagram
+              onSelectGene={setSelectedGene}
+              selectedGene={selectedGene}
+              activeLabGenes={labSelectedGenes}
+            />
             
             {/* Cards for other traits */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-12">
-              {[
-                { title: "Unbreakable Bones (LRP5)", emoji: "🦴", desc: "A gain-of-function mutation continuous-rebuilds skeletal mass, creating bones that withstand major vehicle collisions without fractures." },
-                { title: "The Short Sleeper (DEC2)", emoji: "⏱️", desc: "Circadian rhythm acceleration enables fully rested, high-energy cognitive capacity on only 4 to 6 hours of sleep nightly with no fatigue." },
-                { title: "Pain & Panic Immunity", emoji: "🧠", desc: "A microdeletion in FAAH-OUT stops breakdown of the bliss molecule anandamide. Zero pain registry, low anxiety, hyper-healing." },
-                { title: "Explosive Fast-Twitch", emoji: "⚡", desc: "The ACTN3 sprinter gene produces critical fast-twitch actinin-3 protein, fueling Olympic-level explosive acceleration." }
-              ].map((card, i) => (
-                <div key={i} className="bg-stone-50 border border-stone-200/60 rounded-xl p-5 shadow-sm hover:shadow-md transition-all">
-                  <div className="text-2xl mb-3">{card.emoji}</div>
-                  <h4 className="font-serif font-bold text-stone-900 text-sm">{card.title}</h4>
-                  <p className="text-xs text-stone-500 leading-relaxed mt-2">{card.desc}</p>
-                </div>
-              ))}
+              <div className="bg-stone-50 border border-stone-200/70 rounded-xl p-5 hover:border-stone-300 transition-colors">
+                <h4 className="font-serif font-bold text-stone-900 text-sm">Unbreakable Bones (LRP5)</h4>
+                <p className="text-xs text-stone-600 leading-relaxed mt-2">
+                  A <GeneticTerm termKey="gain-of-function">gain-of-function</GeneticTerm> mutation continuously rebuilds skeletal mass, creating bones that withstand severe impacts without fractures.
+                </p>
+              </div>
+              <div className="bg-stone-50 border border-stone-200/70 rounded-xl p-5 hover:border-stone-300 transition-colors">
+                <h4 className="font-serif font-bold text-stone-900 text-sm">The Short Sleeper (DEC2)</h4>
+                <p className="text-xs text-stone-600 leading-relaxed mt-2">
+                  Circadian rhythm acceleration enables fully rested, high-energy cognitive capacity on only 4 to 6 hours of sleep nightly with no fatigue.
+                </p>
+              </div>
+              <div className="bg-stone-50 border border-stone-200/70 rounded-xl p-5 hover:border-stone-300 transition-colors">
+                <h4 className="font-serif font-bold text-stone-900 text-sm">Pain & Panic Immunity</h4>
+                <p className="text-xs text-stone-600 leading-relaxed mt-2">
+                  A <GeneticTerm termKey="microdeletion">microdeletion</GeneticTerm> in FAAH-OUT stops breakdown of the bliss molecule{' '}
+                  <GeneticTerm termKey="anandamide">anandamide</GeneticTerm>, disabling{' '}
+                  <GeneticTerm termKey="nociception">nociception</GeneticTerm> pain alarms.
+                </p>
+              </div>
+              <div className="bg-stone-50 border border-stone-200/70 rounded-xl p-5 hover:border-stone-300 transition-colors">
+                <h4 className="font-serif font-bold text-stone-900 text-sm">Explosive Fast-Twitch</h4>
+                <p className="text-xs text-stone-600 leading-relaxed mt-2">
+                  The ACTN3 sprinter gene produces critical fast-twitch actinin-3 protein, fueling elite-level explosive acceleration.
+                </p>
+              </div>
             </div>
           </div>
         </section>
@@ -349,7 +509,40 @@ const App: React.FC = () => {
         {/* Recombination Splicing CRISPR Lab */}
         <section id="crispr" className="py-24 bg-[#F5F4F0] border-b border-stone-200">
           <div className="container mx-auto px-6">
-            <GeneLabSimulator />
+            {sharedBannerVisible && (
+              <div className="max-w-3xl mx-auto mb-4 px-4 py-3 bg-white border border-stone-200 rounded-xl flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs text-stone-700">
+                  <Link2 size={14} className="text-amber-700 shrink-0" />
+                  <span>
+                    Loaded shared genome configuration from link
+                    {labSelectedGenes.length > 0 && (
+                      <span className="font-mono text-stone-500">
+                        {' '}· {labSelectedGenes.map((id) => id.toUpperCase()).join(', ')}
+                      </span>
+                    )}
+                    {selectedGene && (
+                      <span className="font-mono text-stone-500">
+                        {' '}· GWAS: {selectedGene.geneName}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSharedBannerVisible(false)}
+                  aria-label="Dismiss shared link notice"
+                  className="text-xs text-stone-500 hover:text-stone-900 transition-colors"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            <GeneLabSimulator
+              selectedGenes={labSelectedGenes}
+              onChangeSelectedGenes={setLabSelectedGenes}
+              activeGwasGeneId={selectedGene?.id ?? null}
+            />
           </div>
         </section>
 
@@ -405,7 +598,8 @@ const App: React.FC = () => {
                 <h3 className="font-serif text-2xl md:text-3xl mt-1 text-stone-900">Forcing the Genome: CRISPR-Cas9</h3>
                 <div className="w-12 h-1 bg-stone-900 my-4"></div>
                 <p className="text-xs text-stone-500 leading-relaxed">
-                  While statistical probabilities guarantee a natural "super-mutant" with all five traits will never exist, biotechnology bypasses standard probability. CRISPR-Cas9 serves as molecular scissors to cut out standard sequences and splice in Denisovan or outlier variants.
+                  While statistical probabilities guarantee a natural "super-mutant" with all five traits will never exist, biotechnology bypasses standard probability.{' '}
+                  <GeneticTerm termKey="crispr-cas9">CRISPR-Cas9</GeneticTerm> serves as molecular scissors to cut out standard sequences and splice in Denisovan or outlier variants.
                 </p>
               </div>
 

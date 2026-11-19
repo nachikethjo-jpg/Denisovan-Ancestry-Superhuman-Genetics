@@ -3,9 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, RotateCcw, Activity, HelpCircle, AlertTriangle, ShieldCheck, Info, Zap } from 'lucide-react';
+import { Play, RotateCcw, Activity, HelpCircle, AlertTriangle, ShieldCheck, Info, Zap, Save, Check, Share2, Link2 } from 'lucide-react';
+import { GeneticTerm } from './GeneticTermOverlay';
+import { useFirebase } from './FirebaseProvider';
+import { buildShareUrl, copyTextToClipboard } from '../utils/shareState';
+import { GeneticAgeCalculator } from './GeneticAgeCalculator';
 
 // --- TYPE DECLARATIONS ---
 export interface GeneInfo {
@@ -224,8 +228,26 @@ export const AdaptiveIntrogressionDiagram: React.FC = () => {
 };
 
 // --- 2. INTERACTIVE MANHATTAN PLOT DIAGRAM ---
-export const ManhattanPlotDiagram: React.FC<{ onSelectGene: (gene: GeneInfo) => void; selectedGene: GeneInfo | null }> = ({ onSelectGene, selectedGene }) => {
+export const ManhattanPlotDiagram: React.FC<{
+  onSelectGene: (gene: GeneInfo) => void;
+  selectedGene: GeneInfo | null;
+  activeLabGenes?: string[];
+}> = ({ onSelectGene, selectedGene, activeLabGenes = [] }) => {
   const [hoveredNode, setHoveredNode] = useState<GeneInfo | null>(null);
+  const [copiedGwasLink, setCopiedGwasLink] = useState(false);
+
+  const handleCopyGwasShareLink = async () => {
+    const shareUrl = buildShareUrl({
+      genes: activeLabGenes,
+      gwasGeneId: selectedGene?.id ?? null,
+      section: 'gwas',
+    });
+    const ok = await copyTextToClipboard(shareUrl);
+    if (ok) {
+      setCopiedGwasLink(true);
+      window.setTimeout(() => setCopiedGwasLink(false), 2400);
+    }
+  };
 
   // Generate background noise points for the Manhattan plot to look real
   const [backgroundPoints] = useState(() => {
@@ -245,17 +267,22 @@ export const ManhattanPlotDiagram: React.FC<{ onSelectGene: (gene: GeneInfo) => 
 
   return (
     <div className="flex flex-col p-6 bg-stone-950 text-stone-100 rounded-xl border border-stone-800 shadow-xl my-6 w-full max-w-3xl mx-auto">
-      <div className="flex justify-between items-start gap-4 mb-4">
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-4">
         <div>
           <h3 className="font-serif text-xl text-nobel-gold">Genome-Wide Association Study (GWAS)</h3>
           <p className="text-stone-400 text-xs mt-1">
-            Manhattan Plot: Tall peaks represent genetic variants with high statistical correlation to extreme phenotypes.
+            Manhattan Plot: Tall peaks represent genetic variants with high statistical correlation to extreme{' '}
+            <GeneticTerm termKey="phenotype" variant="dark">phenotypes</GeneticTerm>.
           </p>
         </div>
-        <div className="bg-stone-900 border border-stone-800 rounded px-2.5 py-1 text-[10px] font-mono text-stone-400 flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
-          <span>SIGNIFICANCE SIGNAL ACTIVE</span>
-        </div>
+        <button
+          type="button"
+          onClick={handleCopyGwasShareLink}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0"
+        >
+          {copiedGwasLink ? <Check size={13} className="text-emerald-400" /> : <Share2 size={13} />}
+          <span>{copiedGwasLink ? 'Link Copied' : 'Copy Share Link'}</span>
+        </button>
       </div>
 
       {/* Plot Area */}
@@ -382,11 +409,57 @@ export const ManhattanPlotDiagram: React.FC<{ onSelectGene: (gene: GeneInfo) => 
 };
 
 // --- 3. GENE LAB SIMULATOR (COMBINATION & CRISPR LAB) ---
-export const GeneLabSimulator: React.FC = () => {
-  const [selectedGenes, setSelectedGenes] = useState<string[]>([]);
-  const [viscosity, setViscosity] = useState<number>(1.0); // 1.0 (ideal) to 2.5 (thick)
+export interface GeneLabSimulatorProps {
+  selectedGenes?: string[];
+  onChangeSelectedGenes?: (genes: string[]) => void;
+  activeGwasGeneId?: string | null;
+}
+
+export const GeneLabSimulator: React.FC<GeneLabSimulatorProps> = ({
+  selectedGenes: controlledGenes,
+  onChangeSelectedGenes,
+  activeGwasGeneId = null,
+}) => {
+  const { user, saveGenome, savedGenomes } = useFirebase();
+  const [internalGenes, setInternalGenes] = useState<string[]>([]);
+  const selectedGenes = controlledGenes ?? internalGenes;
+  const setSelectedGenes = (updater: string[] | ((prev: string[]) => string[])) => {
+    const next = typeof updater === 'function' ? updater(selectedGenes) : updater;
+    if (onChangeSelectedGenes) {
+      onChangeSelectedGenes(next);
+    } else {
+      setInternalGenes(next);
+    }
+  };
+
+  const [profileLabel, setProfileLabel] = useState<string>('');
+  const [profileNotes, setProfileNotes] = useState<string>('');
+  const [savingProfile, setSavingProfile] = useState<boolean>(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [copiedShareUrl, setCopiedShareUrl] = useState<boolean>(false);
+  const [showShareUrlBar, setShowShareUrlBar] = useState<boolean>(false);
   const [dangerAlerts, setDangerAlerts] = useState<string[]>([]);
   const [compIndex, setCompIndex] = useState<number>(100);
+
+  const shareUrl = useMemo(
+    () =>
+      buildShareUrl({
+        genes: selectedGenes,
+        gwasGeneId: activeGwasGeneId,
+        section: 'crispr',
+      }),
+    [selectedGenes, activeGwasGeneId]
+  );
+
+  const handleCopyShareLink = async () => {
+    setShowShareUrlBar(true);
+    const copied = await copyTextToClipboard(shareUrl);
+    if (copied) {
+      setCopiedShareUrl(true);
+      window.setTimeout(() => setCopiedShareUrl(false), 2400);
+    }
+  };
 
   // Aggregated physical metrics based on active splicing
   const [metrics, setMetrics] = useState({
@@ -399,6 +472,8 @@ export const GeneLabSimulator: React.FC = () => {
   });
 
   const handleToggleGene = (id: string) => {
+    setSaveMessage(null);
+    setSaveError(null);
     setSelectedGenes((prev) =>
       prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]
     );
@@ -406,6 +481,40 @@ export const GeneLabSimulator: React.FC = () => {
 
   const handleClear = () => {
     setSelectedGenes([]);
+    setProfileLabel('');
+    setProfileNotes('');
+    setSaveMessage(null);
+    setSaveError(null);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedGenes.length === 0) return;
+    setSavingProfile(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    try {
+      const defaultLabel = selectedGenes
+        .map((id) => SUPERHUMAN_GENES.find((g) => g.id === id)?.geneName || id)
+        .join(' + ');
+      const createdId = await saveGenome({
+        label: profileLabel.trim() || defaultLabel,
+        geneIds: selectedGenes,
+        synergyIndex: compIndex,
+        notes: profileNotes.trim(),
+      });
+      if (createdId) {
+        setProfileLabel('');
+        setProfileNotes('');
+        setSaveMessage('Saved to your Research Notebook.');
+      }
+    } catch (err) {
+      setSaveError(
+        err instanceof Error ? err.message : 'Unable to save genome profile.'
+      );
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   // Run business logic on combining genes
@@ -458,12 +567,48 @@ export const GeneLabSimulator: React.FC = () => {
 
   return (
     <div className="flex flex-col p-6 bg-white rounded-xl shadow-sm border border-stone-200 w-full max-w-3xl mx-auto my-6">
-      <div className="text-center mb-6">
-        <h3 className="font-serif text-xl font-medium text-stone-900">CRISPR Splicing & Compatibility Simulator</h3>
-        <p className="text-xs text-stone-500 mt-1 max-w-lg mx-auto">
-          Test the biological boundaries of human genetic modification. Splice different mutations together and watch physical trade-offs in real-time.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-6">
+        <div>
+          <h3 className="font-serif text-xl font-medium text-stone-900">CRISPR Splicing & Compatibility Simulator</h3>
+          <p className="text-xs text-stone-500 mt-1 max-w-lg">
+            Test the biological boundaries of human genetic modification. Splice different mutations together, watch physical trade-offs, and share your exact configuration link.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleCopyShareLink}
+          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-stone-100 hover:bg-stone-200/80 border border-stone-200 text-stone-800 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 self-start"
+        >
+          {copiedShareUrl ? <Check size={14} className="text-teal-700" /> : <Share2 size={14} />}
+          <span>{copiedShareUrl ? 'Link Copied' : 'Copy Share Link'}</span>
+        </button>
       </div>
+
+      {/* Selectable Share URL Preview Bar */}
+      {showShareUrlBar && (
+        <div className="mb-5 p-3 bg-stone-50 border border-stone-200 rounded-lg flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="flex items-center gap-2 text-xs text-stone-500 shrink-0">
+            <Link2 size={14} className="text-stone-400" />
+            <span className="font-medium text-stone-700">Shareable URL</span>
+          </div>
+          <input
+            type="text"
+            readOnly
+            value={shareUrl}
+            aria-label="Shareable genome configuration URL"
+            onFocus={(e) => e.currentTarget.select()}
+            onClick={(e) => e.currentTarget.select()}
+            className="flex-1 px-2.5 py-1.5 text-[11px] font-mono bg-white border border-stone-200 rounded text-stone-600 focus:outline-none focus:border-stone-500"
+          />
+          <button
+            type="button"
+            onClick={handleCopyShareLink}
+            className="px-3 py-1.5 bg-stone-900 text-white text-xs font-medium rounded hover:bg-stone-800 transition-colors whitespace-nowrap shrink-0"
+          >
+            {copiedShareUrl ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
         {/* Left Side: Interactive Toggles */}
@@ -582,8 +727,73 @@ export const GeneLabSimulator: React.FC = () => {
               )}
             </AnimatePresence>
           </div>
+
+          {/* Save Spliced Genome to Firestore */}
+          {selectedGenes.length > 0 && (
+            <form
+              onSubmit={handleSaveProfile}
+              className="mt-5 pt-4 border-t border-stone-200 space-y-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <label
+                  htmlFor="genome-profile-label"
+                  className="text-xs font-medium text-stone-700"
+                >
+                  Save to Research Notebook
+                </label>
+                {user && (
+                  <span className="text-[11px] font-mono text-stone-400 tabular-nums">
+                    {savedGenomes.length} saved
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  id="genome-profile-label"
+                  type="text"
+                  maxLength={80}
+                  value={profileLabel}
+                  onChange={(e) => setProfileLabel(e.target.value)}
+                  placeholder="Profile name (e.g. Alpine Endurance)"
+                  className="flex-1 px-3 py-2 text-xs bg-white border border-stone-200 rounded-lg text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-stone-500"
+                />
+                <button
+                  type="submit"
+                  disabled={savingProfile}
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-stone-900 text-white text-xs font-medium rounded-lg hover:bg-stone-800 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0"
+                >
+                  {saveMessage ? <Check size={13} /> : <Save size={13} />}
+                  <span>
+                    {savingProfile
+                      ? 'Saving...'
+                      : user
+                        ? 'Save Profile'
+                        : 'Sign in & Save'}
+                  </span>
+                </button>
+              </div>
+              <input
+                type="text"
+                maxLength={400}
+                value={profileNotes}
+                onChange={(e) => setProfileNotes(e.target.value)}
+                placeholder="Optional observation notes..."
+                aria-label="Optional observation notes"
+                className="w-full px-3 py-1.5 text-xs bg-white border border-stone-200 rounded-lg text-stone-700 placeholder:text-stone-400 focus:outline-none focus:border-stone-500"
+              />
+              {saveMessage && (
+                <p className="text-[11px] text-teal-700 font-medium">{saveMessage}</p>
+              )}
+              {saveError && (
+                <p className="text-[11px] text-red-600">{saveError}</p>
+              )}
+            </form>
+          )}
         </div>
       </div>
+
+      {/* Genetic Age Calculator synced with active spliced mutations */}
+      <GeneticAgeCalculator selectedGenes={selectedGenes} />
     </div>
   );
 };

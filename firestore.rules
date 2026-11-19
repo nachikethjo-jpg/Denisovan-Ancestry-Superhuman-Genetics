@@ -1,0 +1,166 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Reusable Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function userDocExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // --- Entity Validation Blueprints (Anti-Update-Gap) ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'email', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == request.auth.uid && data.uid == userId && isValidId(data.uid) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 && data.email == request.auth.token.email &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidGeneList(geneIds) {
+      return geneIds is list &&
+        geneIds.size() >= 1 &&
+        geneIds.size() <= 6 &&
+        geneIds[0] is string &&
+        geneIds.hasOnly(['epas1', 'fam178b', 'lrp5', 'dec2', 'faahout', 'actn3']);
+    }
+
+    function isValidSavedGenome(data, userId) {
+      return data.keys().hasAll(['userId', 'label', 'geneIds', 'synergyIndex', 'notes', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'label', 'geneIds', 'synergyIndex', 'notes', 'createdAt', 'updatedAt']) &&
+        data.userId is string && data.userId == request.auth.uid && data.userId == userId && isValidId(data.userId) &&
+        data.label is string && data.label.size() >= 1 && data.label.size() <= 80 &&
+        isValidGeneList(data.geneIds) &&
+        (data.synergyIndex is int || data.synergyIndex is float) && data.synergyIndex >= 10 && data.synergyIndex <= 100 &&
+        data.notes is string && data.notes.size() <= 400 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSavedTerm(data, userId) {
+      return data.keys().hasAll(['userId', 'termKey', 'termLabel', 'category', 'createdAt']) &&
+        data.keys().hasOnly(['userId', 'termKey', 'termLabel', 'category', 'createdAt']) &&
+        data.userId is string && data.userId == request.auth.uid && data.userId == userId && isValidId(data.userId) &&
+        data.termKey is string && data.termKey.size() >= 1 && data.termKey.size() <= 64 && data.termKey.matches('^[a-z0-9\\-]+$') &&
+        data.termLabel is string && data.termLabel.size() >= 1 && data.termLabel.size() <= 80 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+        data.createdAt is timestamp;
+    }
+
+    // --- Collection: /users/{userId} (PII Isolated, Owner-Only) ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']);
+
+      allow delete: if false;
+
+      // --- Subcollection: /users/{userId}/savedGenomes/{genomeId} ---
+      match /savedGenomes/{genomeId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(genomeId) && isOwner(userId) && existing().userId == request.auth.uid;
+        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(genomeId) &&
+          isOwner(userId) &&
+          isValidSavedGenome(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          userDocExists(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(genomeId) &&
+          isOwner(userId) &&
+          isValidSavedGenome(incoming(), userId) &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          userDocExists(userId) &&
+          (
+            // Action: Edit notes/label
+            incoming().diff(existing()).affectedKeys().hasOnly(['label', 'notes', 'updatedAt']) ||
+            // Action: Re-splice genome configuration
+            incoming().diff(existing()).affectedKeys().hasOnly(['label', 'geneIds', 'synergyIndex', 'notes', 'updatedAt'])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(genomeId) &&
+          isOwner(userId) &&
+          existing().userId == request.auth.uid &&
+          userDocExists(userId);
+      }
+
+      // --- Subcollection: /users/{userId}/savedTerms/{termId} ---
+      match /savedTerms/{termId} {
+        allow get: if isSignedIn() && isValidId(userId) && isValidId(termId) && isOwner(userId) && existing().userId == request.auth.uid;
+        allow list: if isSignedIn() && isOwner(userId) && resource.data.userId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(termId) &&
+          isOwner(userId) &&
+          isValidSavedTerm(incoming(), userId) &&
+          incoming().termKey == termId &&
+          incoming().createdAt == request.time &&
+          userDocExists(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(termId) &&
+          isOwner(userId) &&
+          existing().userId == request.auth.uid &&
+          userDocExists(userId);
+      }
+    }
+  }
+}
